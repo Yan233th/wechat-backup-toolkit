@@ -1,0 +1,40 @@
+[project]
+name = "wechat-backup-converter"
+version = "0.1.0"
+description = "Convert authorized WeChat PC backup files into SQLite"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+keywords = ["wechat", "backup", "sqlite", "recovery"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "cryptography>=42,<46",
+]
+
+[project.scripts]
+wechat-backup-converter = "wechat_backup_converter.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8,<9",
+  "ruff>=0.9,<1",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
