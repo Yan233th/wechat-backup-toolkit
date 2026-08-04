@@ -96,6 +96,9 @@ def prepare_input(
         shutil.rmtree(work_dir, ignore_errors=True)
         raise
     for entry in extracted.iterdir():
+        if entry.is_symlink():
+            shutil.rmtree(work_dir, ignore_errors=True)
+            raise ValueError(f"archive member must not be a symbolic link: {entry.name}")
         if entry.is_file():
             os.chmod(entry, 0o600)
     return PreparedInput(extracted, work_dir)
@@ -106,11 +109,13 @@ def discover_backup_files(root: Path) -> BackupPaths:
     backup_db = root / "Backup.db"
     text = root / "BAK_0_TEXT"
     for required in (backup_db, text):
-        if not required.is_file():
+        if required.is_symlink() or not required.is_file():
             raise FileNotFoundError(f"required file is missing: {required.name}")
-    media = {
-        entry.name: entry
-        for entry in root.iterdir()
-        if entry.is_file() and entry.name.startswith("BAK_") and entry.name.endswith("_MEDIA")
-    }
+    media: dict[str, Path] = {}
+    for entry in root.iterdir():
+        if not entry.name.startswith("BAK_") or not entry.name.endswith("_MEDIA"):
+            continue
+        if entry.is_symlink() or not entry.is_file():
+            raise ValueError(f"media container must be a regular file: {entry.name}")
+        media[entry.name] = entry
     return BackupPaths(root, backup_db, text, media)

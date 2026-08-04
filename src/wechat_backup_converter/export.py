@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
+from . import __version__
 from .archive import BackupPaths
 from .crypto import decrypt_ecb_slot, sha256_file
 from .index import BackupIndex, TextSegment, load_index
@@ -107,7 +108,7 @@ def seed_output(
 ) -> None:
     metadata = {
         "format": "wechat-pc-backup-export-python-v1",
-        "converter_version": "0.1.0",
+        "converter_version": __version__,
         "exported_at_utc": datetime.now(UTC).isoformat(),
         "source_backup_db_sha256": sha256_file(paths.backup_db),
         "source_text_sha256": sha256_file(paths.text),
@@ -224,6 +225,15 @@ def _message_values(message: ParsedMessage, compact: bool) -> tuple[object, ...]
     )
 
 
+def _validate_message_media(message: ParsedMessage, message_id: int) -> None:
+    if message.media_count != len(message.media_paths):
+        raise ValueError(
+            f"message {message_id}: media_count={message.media_count}, paths={len(message.media_paths)}"
+        )
+    if len(message.media_paths) != len(message.media_types):
+        raise ValueError(f"message {message_id}: media path/type lengths differ")
+
+
 def export_text(
     db: sqlite3.Connection,
     text_path: Path,
@@ -275,8 +285,7 @@ def export_text(
                         *_message_values(message, compact),
                     ),
                 )
-                if len(message.media_paths) != len(message.media_types):
-                    raise ValueError(f"message {message_id}: media path/type lengths differ")
+                _validate_message_media(message, message_id)
                 for media_ordinal, identifier in enumerate(message.media_paths):
                     if identifier is None or identifier not in index.by_identifier:
                         raise ValueError(
@@ -449,7 +458,8 @@ def convert_backup(
         print(f"output: {output}")
         print(f"messages: {message_count}; media index: {len(index.media)}")
         return output
-    except Exception:
+    except BaseException:
+        # Cleanup must also run for Ctrl+C and other non-Exception termination.
         if db is not None:
             db.close()
         partial.unlink(missing_ok=True)
