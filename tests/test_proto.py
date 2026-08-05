@@ -1,3 +1,5 @@
+import pytest
+
 from wechat_backup_converter.proto import parse_message, parse_proto
 
 
@@ -22,3 +24,9 @@ def test_parse_message_media_fields() -> None:
     assert message.msg_type == 1
     assert message.media_paths == ["id1"]
     assert message.media_types == [9]
+
+
+def test_invalid_utf8_in_known_text_field_is_rejected() -> None:
+    raw = bytes([0x12, 0x01, 0xFF])
+    with pytest.raises(UnicodeDecodeError):
+        parse_message(raw)

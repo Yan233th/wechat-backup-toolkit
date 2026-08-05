@@ -76,7 +76,10 @@ def all_bytes(fields: list[ProtoField], number: int) -> list[bytes]:
 
 
 def decode_text(value: bytes | None) -> str | None:
-    return None if value is None else value.decode("utf-8", "replace")
+    # Recognized text fields must never be silently altered during a one-way
+    # conversion. Invalid UTF-8 therefore makes the conversion fail explicitly
+    # instead of being replaced with U+FFFD.
+    return None if value is None else value.decode("utf-8", "strict")
 
 
 def decode_etl(value: bytes | None) -> str | None:

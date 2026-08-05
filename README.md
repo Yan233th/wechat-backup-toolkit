@@ -24,6 +24,7 @@ the virtual environment, and command execution are managed by
 - Decrypts `BAK_0_TEXT` by indexed AES-ECB segments without writing a full
   plaintext text container.
 - Translates known message fields into ordinary SQLite columns.
+- Rejects invalid UTF-8 in known text fields instead of silently replacing bytes.
 - Preserves conversation, segment, media, and message-to-media relationships.
 - Supports media objects split across multiple `BAK_*_MEDIA` containers.
 - Streams large media objects with bounded memory.
