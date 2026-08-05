@@ -10,47 +10,59 @@ from . import __version__
 from .archive import discover_backup_files, prepare_input
 from .crypto import decrypt_sqlcipher3
 from .export import ExportConfig, convert_backup
+from .verify import VerificationResult, verify_backup
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Convert an authorized WeChat PC backup to SQLite")
+def _add_input_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--input", required=True, type=Path, help="backup directory or .7z archive")
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("wechat_export.db"),
-        help="output SQLite database",
-    )
     parser.add_argument(
         "--key-file",
         type=Path,
         help="raw 32-byte key or an English record containing Key:",
     )
-    parser.add_argument("--media", choices=("none", "sample", "verify", "all"), default="none")
-    parser.add_argument(
-        "--media-dir",
-        type=Path,
-        help="media output directory (default: <output>.media)",
-    )
-    parser.add_argument(
-        "--media-limit", type=int, default=20, help="maximum items for --media sample"
-    )
     parser.add_argument("--work-dir", type=Path, help="parent directory for temporary work files")
     parser.add_argument("--7z", dest="seven_zip", help="path to 7z/7zz/7za executable")
-    parser.add_argument(
-        "--compact", action="store_true", help="omit raw protobuf and embedded blobs"
-    )
     parser.add_argument(
         "--keep-work",
         action="store_true",
         help="retain decrypted temporary index/archive files",
     )
-    parser.add_argument(
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Translate or verify an authorized WeChat PC backup"
+    )
+    parser.add_argument("--version", action="version", version=__version__)
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    convert = commands.add_parser("convert", help="translate the backup into SQLite")
+    _add_input_options(convert)
+    convert.add_argument(
+        "--output",
+        type=Path,
+        default=Path("wechat_export.db"),
+        help="output SQLite database",
+    )
+    convert.add_argument("--media", choices=("none", "sample", "all"), default="none")
+    convert.add_argument(
+        "--media-dir",
+        type=Path,
+        help="media output directory (default: <output>.media)",
+    )
+    convert.add_argument(
+        "--media-limit", type=int, default=20, help="maximum items for --media sample"
+    )
+    convert.add_argument(
         "--overwrite",
         action="store_true",
         help="replace output after making a timestamped backup",
     )
-    parser.add_argument("--version", action="version", version=__version__)
+
+    verify = commands.add_parser(
+        "verify", help="validate the complete backup without producing SQLite"
+    )
+    _add_input_options(verify)
     return parser
 
 
@@ -78,13 +90,11 @@ def load_key(path: Path | None) -> bytes:
     return key
 
 
-def run(args: argparse.Namespace) -> Path:
-    if args.media_limit < 1:
-        raise ValueError("--media-limit must be positive")
+def _decrypt_index(args: argparse.Namespace, include_media: bool):
     key = load_key(args.key_file)
     key_hash = hashlib.sha256(key).hexdigest()
     print(f"key: 32 literal ASCII bytes, sha256={key_hash}")
-    prepared = prepare_input(args.input, args.work_dir, args.media, args.seven_zip)
+    prepared = prepare_input(args.input, args.work_dir, include_media, args.seven_zip)
     prepared.retained = args.keep_work
     try:
         paths = discover_backup_files(prepared.input_dir)
@@ -92,6 +102,20 @@ def run(args: argparse.Namespace) -> Path:
         print("decrypting and authenticating Backup.db")
         pages = decrypt_sqlcipher3(paths.backup_db, decrypted_index, key)
         print(f"Backup.db: {pages} authenticated pages")
+        return key, key_hash, prepared, paths, decrypted_index
+    except BaseException:
+        if args.keep_work:
+            print(f"work directory retained: {prepared.work_dir}")
+        else:
+            prepared.cleanup()
+        raise
+
+
+def run_convert(args: argparse.Namespace) -> Path:
+    if args.media_limit < 1:
+        raise ValueError("--media-limit must be positive")
+    key, key_hash, prepared, paths, decrypted_index = _decrypt_index(args, args.media != "none")
+    try:
         media_dir = args.media_dir
         if media_dir is None and args.media in {"sample", "all"}:
             media_dir = Path(f"{args.output}.media")
@@ -100,10 +124,20 @@ def run(args: argparse.Namespace) -> Path:
             args.media,
             media_dir,
             args.media_limit,
-            args.compact,
             args.overwrite,
         )
         return convert_backup(config, paths, decrypted_index, key, key_hash)
+    finally:
+        if args.keep_work:
+            print(f"work directory retained: {prepared.work_dir}")
+        else:
+            prepared.cleanup()
+
+
+def run_verify(args: argparse.Namespace) -> VerificationResult:
+    key, _, prepared, paths, decrypted_index = _decrypt_index(args, include_media=True)
+    try:
+        return verify_backup(paths, decrypted_index, key)
     finally:
         if args.keep_work:
             print(f"work directory retained: {prepared.work_dir}")
@@ -115,7 +149,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        run(args)
+        if args.command == "convert":
+            run_convert(args)
+        else:
+            run_verify(args)
     except KeyboardInterrupt:
         print("error: interrupted", file=sys.stderr)
         return 130

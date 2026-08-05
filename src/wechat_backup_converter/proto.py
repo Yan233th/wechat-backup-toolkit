@@ -87,13 +87,6 @@ def decode_etm(value: bytes) -> int:
     return first_varint(parse_proto(value), 1)
 
 
-def decode_gol(value: bytes | None) -> tuple[int, bytes | None]:
-    if value is None:
-        return 0, None
-    fields = parse_proto(value)
-    return first_varint(fields, 1), first_bytes(fields, 2)
-
-
 @dataclass
 class ParsedMessage:
     msg_type: int
@@ -108,16 +101,10 @@ class ParsedMessage:
     media_count: int
     media_paths: list[str | None]
     media_types: list[int]
-    embedded_declared_length: int
-    embedded_data: bytes | None
-    embedded_data_length: int
-    embedded_media_type: int
     msg_server_id: int
     msg_seq: int
     create_time_ms: int
     flag: int
-    unknown_fields: list[dict[str, int | None]]
-    raw: bytes
 
     @property
     def media_paths_json(self) -> str:
@@ -127,27 +114,9 @@ class ParsedMessage:
     def media_types_json(self) -> str:
         return json.dumps(self.media_types, separators=(",", ":"))
 
-    @property
-    def unknown_fields_json(self) -> str:
-        return json.dumps(self.unknown_fields, separators=(",", ":"))
-
 
 def parse_message(raw: bytes) -> ParsedMessage:
     fields = parse_proto(raw)
-    embedded_declared, embedded_data = decode_gol(first_bytes(fields, 13))
-    known = set(range(1, 20))
-    unknown: list[dict[str, int | None]] = []
-    for field in fields:
-        if field.number in known:
-            continue
-        unknown.append(
-            {
-                "field": field.number,
-                "wire": field.wire,
-                "length": len(field.value) if field.wire == 2 else None,
-                "value": int(field.value) if field.wire == 0 else None,
-            }
-        )
     return ParsedMessage(
         msg_type=first_varint(fields, 1),
         field2_text=decode_text(first_bytes(fields, 2)),
@@ -161,17 +130,20 @@ def parse_message(raw: bytes) -> ParsedMessage:
         media_count=first_varint(fields, 10),
         media_paths=[decode_etl(value) for value in all_bytes(fields, 11)],
         media_types=[decode_etm(value) for value in all_bytes(fields, 12)],
-        embedded_declared_length=embedded_declared,
-        embedded_data=embedded_data,
-        embedded_data_length=first_varint(fields, 14),
-        embedded_media_type=first_varint(fields, 15),
         msg_server_id=first_varint(fields, 16),
         msg_seq=first_varint(fields, 17),
         create_time_ms=first_varint(fields, 18),
         flag=first_varint(fields, 19),
-        unknown_fields=unknown,
-        raw=raw,
     )
+
+
+def validate_message_media(message: ParsedMessage, label: str) -> None:
+    if message.media_count != len(message.media_paths):
+        raise ValueError(
+            f"{label}: media_count={message.media_count}, paths={len(message.media_paths)}"
+        )
+    if len(message.media_paths) != len(message.media_types):
+        raise ValueError(f"{label}: media path/type lengths differ")
 
 
 def parse_segment(data: bytes) -> tuple[int, list[bytes]]:

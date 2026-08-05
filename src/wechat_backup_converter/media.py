@@ -65,7 +65,7 @@ def select_media_objects(
     media_order: list[MediaObject],
     media_types: dict[int, set[int]],
 ) -> list[MediaObject]:
-    if mode in {"verify", "all"}:
+    if mode == "all":
         return list(media_order)
     if mode != "sample":
         return []

@@ -13,7 +13,7 @@ from .archive import BackupPaths
 from .crypto import decrypt_ecb_slot, sha256_file
 from .index import BackupIndex, TextSegment, load_index
 from .media import decrypt_one_media, prepare_media_root, select_media_objects
-from .proto import ParsedMessage, parse_message, parse_segment
+from .proto import ParsedMessage, parse_message, parse_segment, validate_message_media
 
 
 @dataclass
@@ -22,7 +22,6 @@ class ExportConfig:
     media_mode: str
     media_dir: Path | None
     media_limit: int
-    compact: bool
     overwrite: bool
 
 
@@ -70,9 +69,7 @@ def initialize_output(db: sqlite3.Connection) -> None:
           create_time INTEGER, create_time_ms INTEGER, msg_server_id INTEGER,
           msg_seq INTEGER, flag INTEGER, legacy_server_id INTEGER, field2_text TEXT,
           field8_text TEXT, media_count INTEGER, media_paths_json TEXT,
-          media_types_json TEXT, embedded_declared_length INTEGER,
-          embedded_data_length INTEGER, embedded_media_type INTEGER,
-          embedded_data BLOB, unknown_fields_json TEXT, raw_proto BLOB,
+          media_types_json TEXT,
           UNIQUE(segment_rowid, ordinal_in_segment)
         );
         CREATE TABLE media (
@@ -116,7 +113,6 @@ def seed_output(
         "backup_key_stored": "false",
         "message_proto": "com.tencent.mm.protocal.protobuf.je/jd",
         "media_mode": config.media_mode,
-        "compact": str(config.compact).lower(),
     }
     db.executemany("INSERT INTO export_meta(key,value) VALUES (?,?)", sorted(metadata.items()))
     info = index.metadata
@@ -198,7 +194,7 @@ def _decrypt_text_segment(source, segment: TextSegment, key: bytes) -> bytes:
     return decrypt_ecb_slot(source, segment.offset, segment.length, key)
 
 
-def _message_values(message: ParsedMessage, compact: bool) -> tuple[object, ...]:
+def _message_values(message: ParsedMessage) -> tuple[object, ...]:
     return (
         message.msg_type,
         message.from_username,
@@ -216,22 +212,7 @@ def _message_values(message: ParsedMessage, compact: bool) -> tuple[object, ...]
         message.media_count,
         message.media_paths_json,
         message.media_types_json,
-        message.embedded_declared_length,
-        message.embedded_data_length,
-        message.embedded_media_type,
-        None if compact else message.embedded_data,
-        message.unknown_fields_json,
-        None if compact else message.raw,
     )
-
-
-def _validate_message_media(message: ParsedMessage, message_id: int) -> None:
-    if message.media_count != len(message.media_paths):
-        raise ValueError(
-            f"message {message_id}: media_count={message.media_count}, paths={len(message.media_paths)}"
-        )
-    if len(message.media_paths) != len(message.media_types):
-        raise ValueError(f"message {message_id}: media path/type lengths differ")
 
 
 def export_text(
@@ -239,7 +220,6 @@ def export_text(
     text_path: Path,
     key: bytes,
     index: BackupIndex,
-    compact: bool,
 ) -> tuple[int, dict[int, set[int]]]:
     media_types: dict[int, set[int]] = {}
     message_id = 0
@@ -275,17 +255,16 @@ def export_text(
                 db.execute(
                     """INSERT INTO messages(id,segment_rowid,ordinal_in_segment,msg_type,from_username,
                     to_username,content,status,create_time,create_time_ms,msg_server_id,msg_seq,flag,
-                    legacy_server_id,field2_text,field8_text,media_count,media_paths_json,media_types_json,
-                    embedded_declared_length,embedded_data_length,embedded_media_type,embedded_data,
-                    unknown_fields_json,raw_proto) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    legacy_server_id,field2_text,field8_text,media_count,media_paths_json,media_types_json)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         message_id,
                         segment.row_id,
                         ordinal,
-                        *_message_values(message, compact),
+                        *_message_values(message),
                     ),
                 )
-                _validate_message_media(message, message_id)
+                validate_message_media(message, f"message {message_id}")
                 for media_ordinal, identifier in enumerate(message.media_paths):
                     if identifier is None or identifier not in index.by_identifier:
                         raise ValueError(
@@ -329,18 +308,16 @@ def process_media(
     selected = select_media_objects(mode, media_limit, index.media_order, media_types)
     if not selected:
         raise ValueError("media mode requested, but no media objects were selected")
-    write_files = mode in {"sample", "all"}
-    root = prepare_media_root(media_dir) if write_files and media_dir else None
-    if write_files and root is None:
+    root = prepare_media_root(media_dir) if media_dir else None
+    if root is None:
         raise ValueError("media output directory is required for sample/all")
-    if root is not None:
-        db.execute("INSERT OR REPLACE INTO export_meta VALUES ('media_root',?)", (str(root),))
+    db.execute("INSERT OR REPLACE INTO export_meta VALUES ('media_root',?)", (str(root),))
     files = {name: path.open("rb") for name, path in paths.media.items()}
     try:
         block = key
         print(f"media: mode={mode}, processing {len(selected)}/{len(index.media)} objects")
         for number, obj in enumerate(selected, 1):
-            result = decrypt_one_media(block, files, obj, root, write_files)
+            result = decrypt_one_media(block, files, obj, root, True)
             db.execute(
                 """UPDATE media SET plaintext_size=?,detected_format=?,output_path=?,
                 plaintext_sha256=?,extraction_status=? WHERE media_id=?""",
@@ -436,7 +413,7 @@ def convert_backup(
         db = _connect_output(partial)
         initialize_output(db)
         seed_output(db, index, paths, key_hash, config)
-        message_count, media_types = export_text(db, paths.text, key[:16], index, config.compact)
+        message_count, media_types = export_text(db, paths.text, key[:16], index)
         update_media_types(db, media_types)
         process_media(
             db,

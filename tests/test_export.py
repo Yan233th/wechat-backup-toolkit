@@ -1,9 +1,10 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
 
-from wechat_backup_converter.export import _publish_output, _validate_message_media
-from wechat_backup_converter.proto import parse_message
+from wechat_backup_converter.export import _publish_output, initialize_output
+from wechat_backup_converter.proto import parse_message, validate_message_media
 
 
 def test_publish_new_output(tmp_path: Path) -> None:
@@ -39,4 +40,18 @@ def test_publish_refuses_overwrite(tmp_path: Path) -> None:
 def test_message_media_count_must_match_paths() -> None:
     message = parse_message(bytes([0x50, 0x01]))
     with pytest.raises(ValueError, match="media_count=1, paths=0"):
-        _validate_message_media(message, 7)
+        validate_message_media(message, "message 7")
+
+
+def test_message_schema_contains_only_translated_fields() -> None:
+    db = sqlite3.connect(":memory:")
+    initialize_output(db)
+    columns = {row[1] for row in db.execute("PRAGMA table_info(messages)")}
+    assert {
+        "raw_proto",
+        "unknown_fields_json",
+        "embedded_data",
+        "embedded_declared_length",
+        "embedded_data_length",
+        "embedded_media_type",
+    }.isdisjoint(columns)

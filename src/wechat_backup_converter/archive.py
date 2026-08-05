@@ -55,7 +55,7 @@ def find_seven_zip(explicit: str | None) -> str:
 
 
 def prepare_input(
-    input_path: Path, work_parent: Path | None, media_mode: str, seven_zip: str | None
+    input_path: Path, work_parent: Path | None, include_media: bool, seven_zip: str | None
 ) -> PreparedInput:
     input_path = input_path.expanduser().resolve()
     if not input_path.exists():
@@ -74,7 +74,7 @@ def prepare_input(
     extracted = work_dir / "input"
     extracted.mkdir(mode=0o700)
     members = ["Backup.db", "BAK_0_TEXT"]
-    if media_mode != "none":
+    if include_media:
         members.append("BAK_*_MEDIA")
     command = [
         tool,

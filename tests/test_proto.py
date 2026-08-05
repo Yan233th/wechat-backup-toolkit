@@ -11,7 +11,6 @@ def test_empty_repeated_fields_are_arrays() -> None:
     message = parse_message(bytes([0x08, 0x01]))
     assert message.media_paths == []
     assert message.media_types == []
-    assert message.unknown_fields_json == "[]"
 
 
 def test_parse_message_media_fields() -> None:
